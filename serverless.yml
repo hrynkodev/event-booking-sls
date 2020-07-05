@@ -1,0 +1,104 @@
+service: EventBookingTest
+
+provider:
+  name: aws
+  runtime: python3.7
+  stage_default: dev
+  variableSyntax: "\\${((?!AWS::)[ ~:a-zA-Z0-9._@'\",\\-\\/\\(\\)]+?)}"
+  region: eu-west-1
+  stage: ${opt:stage, self:provider.stage_default}
+  profile: booking-${self:provider.stage}
+  environment: ${file(serverless.env.yml):${self:provider.stage}}
+  timeout: 12
+  versionFunctions: false
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action: "lambda:InvokeFunction"
+      Resource:
+        - Fn::Sub: "arn:aws:lambda:${self:provider.region}:*:function:*"
+    - Effect: "Allow"
+      Action: "dynamodb:*"
+      Resource:
+        - Fn::Sub: "arn:aws:dynamodb:${self:provider.region}:*:table/*"
+    - Effect: "Allow"
+      Action: "sqs:*"
+      Resource: "arn:aws:sqs:*"
+
+package:
+  exclude:
+    - .venv/**
+    - .vscode/**
+    - .env
+    - venv/**
+    - .pytest_cache/**
+    - .serverless/**
+    - docs/**
+    - node_modules/**
+    - tests/**
+    - .idea/**
+
+functions:
+  GetAllEvents:
+    handler: src.handlers.get_all_events
+    events:
+      - http:
+          path: events
+          integration: lambda-proxy
+          method: get
+          cors: true
+  BookPlace:
+    handler: src.handlers.book_place
+    events:
+      - http:
+          path: events/place
+          integration: lambda-proxy
+          method: post
+          cors: true
+  StreamTrigger:
+    handler: src.handlers.booking_trigger
+    events:
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - BookingsTable
+              - StreamArn
+resources:
+  Resources:
+    EventsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: events-${self:provider.stage}
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        AttributeDefinitions:
+          - AttributeName: event_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: event_id
+            KeyType: HASH
+
+    BookingsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: bookings-${self:provider.stage}
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        AttributeDefinitions:
+          - AttributeName: booking_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: booking_id
+            KeyType: HASH
+        StreamSpecification:
+          StreamViewType: NEW_IMAGE
+
+    ReservationQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: reservation-queue
+
+plugins:
+  - serverless-python-requirements
